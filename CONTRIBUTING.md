@@ -295,7 +295,7 @@ accepted types are:
   is too big to be considered just `perf`
 - **chore**: Maintenance changes related to code cleaning that isn't
   considered part of a refactor, build process updates, dependency bumps, or
-  auxiliary tools and libraries updates (LuaRocks, Travis-ci, etc...).
+  auxiliary tools and libraries updates (LuaRocks, GitHub Actions, etc...).
 
 [Back to TOC](#table-of-contents)
 
@@ -954,6 +954,17 @@ if thing_one < 1 and long_and_complicated_function(arg1, arg2) < 10
 then
 
 end
+```
+
+When invoking `ngx.log()` with some variable as input, prefer vararg-style
+calls rather than using the string concatenation operator (`..`):
+
+```lua
+-- bad
+ngx.log(ngx.DEBUG, "if `my_var` is nil, this code throws an exception: " .. my_var)
+
+-- good
+ngx.log(ngx.DEBUG, "if `my_var` is nil, this code is fine: ", my_var)
 ```
 
 [Back to code style TOC](#table-of-contents---code-style)

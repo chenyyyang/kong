@@ -19,7 +19,7 @@ local insert       = table.insert
 local format       = string.format
 local unpack       = unpack
 local assert       = assert
-local yield        = utils.yield
+local yield        = require("kong.tools.yield").yield
 local pairs        = pairs
 local pcall        = pcall
 local floor        = math.floor
@@ -930,6 +930,7 @@ function Schema:validate_field(field, value)
     local field_schema = get_field_schema(field)
     -- TODO return nested table or string?
     local copy = field_schema:process_auto_fields(value, "insert")
+    -- TODO: explain why we need to make a copy?
     local ok, err = field_schema:validate(copy)
     if not ok then
       return nil, err
@@ -1670,10 +1671,18 @@ function Schema:process_auto_fields(data, context, nulls, opts)
           local new_values = sdata.func(value)
           if new_values then
             for k, v in pairs(new_values) do
-              data[k] = v
+              if type(v) == "table" then
+                data[k] = tablex.merge(data[k] or {}, v, true)
+              else
+                data[k] = v
+              end
             end
           end
         end
+      end
+
+      if is_select and sdata.translate_backwards and not(opts and opts.hide_shorthands) then
+        data[sname] = utils.table_path(data, sdata.translate_backwards)
       end
     end
     if has_errs then
@@ -1769,7 +1778,7 @@ function Schema:process_auto_fields(data, context, nulls, opts)
               if err then
                 kong.log.warn("unable to resolve reference ", value, " (", err, ")")
               else
-                kong.log.warn("unable to resolve reference ", value)
+                kong.log.notice("unable to resolve reference ", value)
               end
 
               value = ""
@@ -1808,7 +1817,7 @@ function Schema:process_auto_fields(data, context, nulls, opts)
                     if err then
                       kong.log.warn("unable to resolve reference ", value[i], " (", err, ")")
                     else
-                      kong.log.warn("unable to resolve reference ", value[i])
+                      kong.log.notice("unable to resolve reference ", value[i])
                     end
 
                     value[i] = ""
@@ -1854,7 +1863,7 @@ function Schema:process_auto_fields(data, context, nulls, opts)
                     if err then
                       kong.log.warn("unable to resolve reference ", v, " (", err, ")")
                     else
-                      kong.log.warn("unable to resolve reference ", v)
+                      kong.log.notice("unable to resolve reference ", v)
                     end
 
                     value[k] = ""
@@ -1903,7 +1912,20 @@ function Schema:process_auto_fields(data, context, nulls, opts)
 
     elseif not ((key == "ttl"   and self.ttl) or
                 (key == "ws_id" and show_ws)) then
-      data[key] = nil
+
+      local should_be_in_ouput = false
+
+      if self.shorthand_fields then
+        for _, shorthand_field in ipairs(self.shorthand_fields) do
+          if shorthand_field[key] and shorthand_field[key].translate_backwards then
+            should_be_in_ouput = is_select
+          end
+        end
+      end
+
+      if not should_be_in_ouput then
+        data[key] = nil
+      end
     end
   end
 
@@ -2345,6 +2367,21 @@ local function run_transformations(self, transformations, input, original_input,
   return output or input
 end
 
+--- Check if the schema has transformation definitions.
+-- @param input a table holding entities
+-- @return a boolean value: 'true' or 'false'
+function Schema:has_transformations(input)
+  if self.transformations then
+    return true
+  end
+
+  local subschema = get_subschema(self, input)
+  if subschema and subschema.transformations then
+    return true
+  end
+
+  return false
+end
 
 --- Run transformations on fields.
 -- @param input The input table.

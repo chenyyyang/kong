@@ -482,15 +482,14 @@ end
 
 
 local function check_update(self, key, entity, options, name)
-  local transform
-  if options ~= nil then
-    local ok, errors = validate_options_value(self, options)
-    if not ok then
-      local err_t = self.errors:invalid_options(errors)
-      return nil, nil, tostring(err_t), err_t
-    end
-    transform = options.transform
+  options = options or {}
+  local ok, errors = validate_options_value(self, options)
+  if not ok then
+    local err_t = self.errors:invalid_options(errors)
+    return nil, nil, tostring(err_t), err_t
   end
+  local transform = options.transform
+
 
   if transform == nil then
     transform = true
@@ -506,9 +505,13 @@ local function check_update(self, key, entity, options, name)
   local rbw_entity
   local err, err_t
   if name then
-     rbw_entity, err, err_t = self["select_by_" .. name](self, key, options)
+    options.hide_shorthands = true
+    rbw_entity, err, err_t = self["select_by_" .. name](self, key, options)
+    options.hide_shorthands = false
   else
-     rbw_entity, err, err_t = self:select(key, options)
+    options.hide_shorthands = true
+    rbw_entity, err, err_t = self:select(key, options)
+    options.hide_shorthands = false
   end
   if err then
     return nil, nil, err, err_t
@@ -973,13 +976,14 @@ function DAO:truncate()
 end
 
 
-function DAO:select(primary_key, options)
-  validate_primary_key_type(primary_key)
+function DAO:select(pk_or_entity, options)
+  validate_primary_key_type(pk_or_entity)
 
   if options ~= nil then
     validate_options_type(options)
   end
 
+  local primary_key = self.schema:extract_pk_values(pk_or_entity)
   local ok, errors = self.schema:validate_primary_key(primary_key)
   if not ok then
     local err_t = self.errors:invalid_primary_key(errors)
@@ -1163,14 +1167,15 @@ function DAO:insert(entity, options)
 end
 
 
-function DAO:update(primary_key, entity, options)
-  validate_primary_key_type(primary_key)
+function DAO:update(pk_or_entity, entity, options)
+  validate_primary_key_type(pk_or_entity)
   validate_entity_type(entity)
 
   if options ~= nil then
     validate_options_type(options)
   end
 
+  local primary_key = self.schema:extract_pk_values(pk_or_entity)
   local ok, errors = self.schema:validate_primary_key(primary_key)
   if not ok then
     local err_t = self.errors:invalid_primary_key(errors)
@@ -1215,14 +1220,15 @@ function DAO:update(primary_key, entity, options)
 end
 
 
-function DAO:upsert(primary_key, entity, options)
-  validate_primary_key_type(primary_key)
+function DAO:upsert(pk_or_entity, entity, options)
+  validate_primary_key_type(pk_or_entity)
   validate_entity_type(entity)
 
   if options ~= nil then
     validate_options_type(options)
   end
 
+  local primary_key = self.schema:extract_pk_values(pk_or_entity)
   local ok, errors = self.schema:validate_primary_key(primary_key)
   if not ok then
     local err_t = self.errors:invalid_primary_key(errors)
@@ -1272,13 +1278,14 @@ function DAO:upsert(primary_key, entity, options)
 end
 
 
-function DAO:delete(primary_key, options)
-  validate_primary_key_type(primary_key)
+function DAO:delete(pk_or_entity, options)
+  validate_primary_key_type(pk_or_entity)
 
   if options ~= nil then
     validate_options_type(options)
   end
 
+  local primary_key = self.schema:extract_pk_values(pk_or_entity)
   local ok, errors = self.schema:validate_primary_key(primary_key)
   if not ok then
     local err_t = self.errors:invalid_primary_key(errors)
@@ -1439,7 +1446,7 @@ function DAO:row_to_entity(row, options)
     end
   end
 
-  local entity, errors = self.schema:process_auto_fields(transformed_entity or row, "select", nulls)
+  local entity, errors = self.schema:process_auto_fields(transformed_entity or row, "select", nulls, options)
   if not entity then
     local err_t = self.errors:schema_violation(errors)
     return nil, tostring(err_t), err_t

@@ -8,6 +8,7 @@ load("//build/openresty/pcre:pcre_repositories.bzl", "pcre_repositories")
 load("//build/openresty/openssl:openssl_repositories.bzl", "openssl_repositories")
 load("//build/openresty/atc_router:atc_router_repositories.bzl", "atc_router_repositories")
 load("//build/openresty/wasmx:wasmx_repositories.bzl", "wasmx_repositories")
+load("//build/openresty/brotli:brotli_repositories.bzl", "brotli_repositories")
 
 # This is a dummy file to export the module's repository.
 _NGINX_MODULE_DUMMY_FILE = """
@@ -23,6 +24,7 @@ def openresty_repositories():
     openssl_repositories()
     atc_router_repositories()
     wasmx_repositories()
+    brotli_repositories()
 
     openresty_version = KONG_VAR["OPENRESTY"]
 
@@ -30,7 +32,7 @@ def openresty_repositories():
         openresty_http_archive_wrapper,
         name = "openresty",
         build_file = "//build/openresty:BUILD.openresty.bazel",
-        sha256 = "5b1eded25c1d4ed76c0336dfae50bd94d187af9c85ead244135dd5ae363b2e2a",
+        sha256 = "32ec1a253a5a13250355a075fe65b7d63ec45c560bbe213350f0992a57cd79df",
         strip_prefix = "openresty-" + openresty_version,
         urls = [
             "https://openresty.org/download/openresty-" + openresty_version + ".tar.gz",
@@ -65,6 +67,15 @@ def openresty_repositories():
         name = "lua-resty-events",
         branch = KONG_VAR["LUA_RESTY_EVENTS"],
         remote = "https://github.com/Kong/lua-resty-events",
+        build_file_content = _NGINX_MODULE_DUMMY_FILE,
+        recursive_init_submodules = True,
+    )
+
+    maybe(
+        new_git_repository,
+        name = "ngx_brotli",
+        branch = KONG_VAR["NGX_BROTLI"],
+        remote = "https://github.com/google/ngx_brotli",
         build_file_content = _NGINX_MODULE_DUMMY_FILE,
         recursive_init_submodules = True,
     )

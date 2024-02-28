@@ -17,7 +17,7 @@ local fixtures = {
           ssl_certificate ${{SSL_CERT}};
           ssl_certificate_key ${{SSL_CERT_KEY}};
 > end
-          ssl_protocols TLSv1.1 TLSv1.2 TLSv1.3;
+          ssl_protocols TLSv1.2 TLSv1.3;
 
           location ~ "/2015-03-31/functions/(?:[^/])*/invocations" {
               content_by_lua_block {
@@ -56,6 +56,9 @@ local fixtures = {
 
                     elseif string.match(ngx.var.uri, "functionEcho") then
                       require("spec.fixtures.mock_upstream").send_default_json_response()
+
+                    elseif string.match(ngx.var.uri, "functionWithTransferEncodingHeader") then
+                      ngx.say("{\"statusCode\": 200, \"headers\": { \"Transfer-Encoding\": \"chunked\", \"transfer-encoding\": \"chunked\"}}")
 
                     elseif type(res) == 'string' then
                       ngx.header["Content-Length"] = #res + 1

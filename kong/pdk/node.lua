@@ -27,6 +27,11 @@ local shms = {}
 local n_workers = ngx.worker.count()
 
 
+ffi.cdef[[
+int gethostname(char *name, size_t len);
+]]
+
+
 for shm_name, shm in pairs(shared) do
   insert(shms, {
     zone = shm,
@@ -286,7 +291,7 @@ local function new(self)
       node_id = _NODE.get_id()
     end
     if node_id then
-      ngx.log(ngx.INFO, "kong node-id: " .. node_id)
+      ngx.log(ngx.INFO, "kong node-id: ", node_id)
     end
   end
 

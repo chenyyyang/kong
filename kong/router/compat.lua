@@ -10,7 +10,8 @@ local tb_nkeys = require("table.nkeys")
 local uuid = require("resty.jit-uuid")
 
 
-local shallow_copy    = require("kong.tools.utils").shallow_copy
+local shallow_copy          = require("kong.tools.utils").shallow_copy
+local replace_dashes_lower  = require("kong.tools.string").replace_dashes_lower
 
 
 local is_regex_magic  = utils.is_regex_magic
@@ -136,7 +137,11 @@ local function gen_for_nets(ip_field, port_field, vals)
     ::continue::
   end   -- for
 
-  return nets_buf:put(")"):get()
+  local str = nets_buf:put(")"):get()
+
+  -- returns a local variable instead of using a tail call
+  -- to avoid NYI
+  return str
 end
 
 
@@ -164,9 +169,9 @@ local function get_expression(route)
     -- See #6425, if `net.protocol` is not `https`
     -- then SNI matching should simply not be considered
     if srcs or dsts then
-      gen = "(net.protocol != \"tls\""   .. LOGICAL_OR .. gen .. ")"
+      gen = "(net.protocol != r#\"tls\"#"   .. LOGICAL_OR .. gen .. ")"
     else
-      gen = "(net.protocol != \"https\"" .. LOGICAL_OR .. gen .. ")"
+      gen = "(net.protocol != r#\"https\"#" .. LOGICAL_OR .. gen .. ")"
     end
 
     expression_append(expr_buf, LOGICAL_AND, gen)
@@ -187,7 +192,10 @@ local function get_expression(route)
     end
 
     if src_gen or dst_gen then
-      return expr_buf:get()
+      -- returns a local variable instead of using a tail call
+      -- to avoid NYI
+      local str = expr_buf:get()
+      return str
     end
   end
 
@@ -216,10 +224,10 @@ local function get_expression(route)
         host = host:sub(1, -2)
       end
 
-      local exp = "http.host ".. op .. " \"" .. host .. "\""
+      local exp = "http.host ".. op .. " r#\"" .. host .. "\"#"
       if port then
         exp = "(" .. exp .. LOGICAL_AND ..
-              "net.port ".. OP_EQUAL .. " " .. port .. ")"
+              "net.dst.port ".. OP_EQUAL .. " " .. port .. ")"
       end
       expression_append(hosts_buf, LOGICAL_OR, exp, i)
     end -- for route.hosts
@@ -251,7 +259,7 @@ local function get_expression(route)
       single_header_buf:reset():put("(")
 
       for i, value in ipairs(v) do
-        local name = "any(http.headers." .. h:gsub("-", "_"):lower() .. ")"
+        local name = "any(lower(http.headers." .. replace_dashes_lower(h) .. "))"
         local op = OP_EQUAL
 
         -- value starts with "~*"
@@ -271,7 +279,11 @@ local function get_expression(route)
     expression_append(expr_buf, LOGICAL_AND, headers_buf:get())
   end
 
-  return expr_buf:get()
+  local str = expr_buf:get()
+
+  -- returns a local variable instead of using a tail call
+  -- to avoid NYI
+  return str
 end
 
 

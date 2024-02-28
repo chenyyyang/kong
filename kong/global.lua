@@ -68,7 +68,7 @@ end
 
 
 local _GLOBAL = {
-  phases = phase_checker.phases,
+  phases                 = phase_checker.phases,
 }
 
 

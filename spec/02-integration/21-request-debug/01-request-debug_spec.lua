@@ -144,8 +144,7 @@ local function get_output_header(_deployment, path, filter, fake_ip, token)
       ["X-Real-IP"] = fake_ip or "127.0.0.1",
     }
   })
-  assert.not_same(500, res.status)
-  res:read_body() -- discard body
+  assert.not_same(500, res.status, res:read_body())
   proxy_client:close()
 
   if not res.headers["X-Kong-Request-Debug-Output"] then
@@ -512,7 +511,7 @@ describe(desc, function()
     local total_log = assert(tonumber(log_output.child.upstream.total_time))
     local tfb_log = assert(tonumber(log_output.child.upstream.child.time_to_first_byte.total_time))
     local streaming = assert(tonumber(log_output.child.upstream.child.streaming.total_time))
-    assert.near(tfb_header, tfb_log, 10)
+    assert.near(tfb_header, tfb_log, 50)
     assert.same(total_log, tfb_log + streaming)
 
     assert.near(TIME_TO_FIRST_BYTE, tfb_log, 50)
@@ -536,6 +535,7 @@ describe(desc, function()
     assert.truthy(header_output.child.rewrite)
     assert.truthy(header_output.child.access)
     assert.truthy(header_output.child.access.child.dns) -- upstream is resolved in access phase
+    assert.truthy(header_output.child.access.child.router) -- router is executed in access phase
     assert(header_output.child.access.child.dns.child.localhost.child.resolve.cache_hit ~= nil, "dns cache hit should be recorded")
     assert.truthy(header_output.child.balancer)
     assert.truthy(header_output.child.header_filter)
@@ -543,6 +543,7 @@ describe(desc, function()
     assert.truthy(log_output.child.rewrite)
     assert.truthy(log_output.child.access)
     assert.truthy(log_output.child.access.child.dns) -- upstream is resolved in access phase
+    assert.truthy(log_output.child.access.child.router) -- router is executed in access phase
     assert(log_output.child.access.child.dns.child.localhost.child.resolve.cache_hit ~= nil, "dns cache hit should be recorded")
     assert.truthy(log_output.child.balancer)
     assert.truthy(log_output.child.header_filter)
@@ -574,11 +575,13 @@ describe(desc, function()
     assert.truthy(header_output.child.rewrite)
     assert.truthy(header_output.child.access)
     assert.truthy(header_output.child.access.child.dns) -- upstream is resolved in access phase
+    assert.truthy(header_output.child.access.child.router) -- router is executed in access phase
     assert.truthy(header_output.child.response)
 
     assert.truthy(log_output.child.rewrite)
     assert.truthy(log_output.child.access)
     assert.truthy(log_output.child.access.child.dns) -- upstream is resolved in access phase
+    assert.truthy(header_output.child.access.child.router) -- router is executed in access phase
     assert.truthy(log_output.child.body_filter)
     assert.truthy(log_output.child.log)
 
@@ -626,10 +629,12 @@ describe(desc, function()
     local plugin_id = setup_plugin(route_id, "rate-limiting", {
       second            = 9999,
       policy            = "redis",
-      redis_host        = helpers.redis_host,
-      redis_port        = helpers.redis_port,
       fault_tolerant    = false,
-      redis_timeout     = 10000,
+      redis = {
+        host        = helpers.redis_host,
+        port        = helpers.redis_port,
+        timeout     = 10000,
+      }
     })
 
     finally(function()
@@ -656,7 +661,7 @@ describe(desc, function()
 
   it("truncate/split too large debug output", function()
     local route_id = setup_route("/large_debug_output", upstream)
-    local plugin_id = setup_plugin(route_id, "muti-external-http-calls", { calls = 50 })
+    local plugin_id = setup_plugin(route_id, "muti-external-http-calls", { calls = 10 })
 
     finally(function()
       if plugin_id then

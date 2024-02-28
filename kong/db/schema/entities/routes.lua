@@ -1,35 +1,49 @@
 local typedefs = require("kong.db.schema.typedefs")
-local router = require("resty.router.router")
 local deprecation = require("kong.deprecation")
 
+local kong_router_flavor = kong and kong.configuration and kong.configuration.router_flavor
+
+-- works with both `traditional_compatible` and `expressions` routes
 local validate_route
-local has_paths
-do
-  local isempty        = require("table.isempty")
-  local CACHED_SCHEMA  = require("kong.router.atc").schema
-  local get_expression = require("kong.router.compat").get_expression
+if kong_router_flavor ~= "traditional" then
+  local ipairs = ipairs
+  local tonumber = tonumber
+  local re_match = ngx.re.match
 
-  local type = type
+  local router = require("resty.router.router")
+  local get_schema = require("kong.router.atc").schema
+  local get_expression = kong_router_flavor == "traditional_compatible" and
+                         require("kong.router.compat").get_expression or
+                         require("kong.router.expressions").transform_expression
 
-  -- works with both `traditional_compatiable` and `expressions` routes`
+  local HTTP_PATH_SEGMENTS_PREFIX = "http.path.segments."
+  local HTTP_PATH_SEGMENTS_SUFFIX_REG = [[^(0|[1-9]\d*)(_([1-9]\d*))?$]]
+
   validate_route = function(entity)
-    local exp = entity.expression or get_expression(entity)
+    local schema = get_schema(entity.protocols)
+    local exp = get_expression(entity)
 
-    local ok, err = router.validate(CACHED_SCHEMA, exp)
-    if not ok then
+    local fields, err = router.validate(schema, exp)
+    if not fields then
       return nil, "Router Expression failed validation: " .. err
     end
 
+    for _, f in ipairs(fields) do
+      if f:find(HTTP_PATH_SEGMENTS_PREFIX, 1, true) then
+        local suffix = f:sub(#HTTP_PATH_SEGMENTS_PREFIX + 1)
+        local m = re_match(suffix, HTTP_PATH_SEGMENTS_SUFFIX_REG, "jo")
+
+        if (suffix ~= "len") and
+           (not m or (m[2] and tonumber(m[1]) >= tonumber(m[3]))) then
+          return nil, "Router Expression failed validation: " ..
+                      "illformed http.path.segments.* field"
+        end
+      end -- if f:find
+    end -- for fields
+
     return true
   end
-
-  has_paths = function(entity)
-    local paths = entity.paths
-    return type(paths) == "table" and not isempty(paths)
-  end
-end
-
-local kong_router_flavor = kong and kong.configuration and kong.configuration.router_flavor
+end   -- if kong_router_flavor ~= "traditional"
 
 if kong_router_flavor == "expressions" then
   return {
@@ -73,15 +87,8 @@ if kong_router_flavor == "expressions" then
 
     entity_checks = {
       { custom_entity_check = {
-        field_sources = { "expression", "id", },
-        fn = function(entity)
-          local ok, err = validate_route(entity)
-          if not ok then
-            return nil, err
-          end
-
-          return true
-        end,
+        field_sources = { "expression", "id", "protocols", },
+        fn = validate_route,
       } },
     },
   }
@@ -126,17 +133,7 @@ else
     table.insert(entity_checks,
       { custom_entity_check = {
         run_with_missing_fields = true,
-        field_sources = { "id", "paths", },
-        fn = function(entity)
-          if has_paths(entity) then
-            local ok, err = validate_route(entity)
-            if not ok then
-              return nil, err
-            end
-          end
-
-          return true
-        end,
+        fn = validate_route,
       }}
     )
   end

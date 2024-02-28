@@ -24,6 +24,12 @@ lua_shared_dict kong_db_cache_miss          12m;
 lua_shared_dict kong_secrets                5m;
 
 underscores_in_headers on;
+> if ssl_cipher_suite == 'old' then
+lua_ssl_conf_command CipherString DEFAULT:@SECLEVEL=0;
+proxy_ssl_conf_command CipherString DEFAULT:@SECLEVEL=0;
+ssl_conf_command CipherString DEFAULT:@SECLEVEL=0;
+grpc_ssl_conf_command CipherString DEFAULT:@SECLEVEL=0;
+> end
 > if ssl_ciphers then
 ssl_ciphers ${{SSL_CIPHERS}};
 > end
@@ -81,7 +87,15 @@ server {
     listen $(entry.listener);
 > end
 
-    error_page 400 404 405 408 411 412 413 414 417 494 /kong_error_handler;
+> for _, entry in ipairs(proxy_listeners) do
+> if entry.http2 then
+    http2 on;
+> break
+> end
+> end
+
+    error_page 400 404 405 408 411 412 413 414 417 /kong_error_handler;
+    error_page 494 =494                            /kong_error_handler;
     error_page 500 502 503 504                     /kong_error_handler;
 
     # Append the kong request id to the error log
@@ -89,7 +103,11 @@ server {
     lua_kong_error_log_request_id $kong_request_id;
 
 > if proxy_access_log_enabled then
+>   if custom_proxy_access_log then
+    access_log ${{PROXY_ACCESS_LOG}};
+>   else
     access_log ${{PROXY_ACCESS_LOG}} kong_log_format;
+>   end
 > else
     access_log off;
 > end
@@ -156,6 +174,11 @@ server {
         proxy_http_version      1.1;
         proxy_buffering          on;
         proxy_request_buffering  on;
+
+        # injected nginx_location_* directives
+> for _, el in ipairs(nginx_location_directives) do
+        $(el.name) $(el.value);
+> end
 
         proxy_set_header      TE                 $upstream_te;
         proxy_set_header      Host               $upstream_host;
@@ -381,6 +404,13 @@ server {
     listen $(entry.listener);
 > end
 
+> for _, entry in ipairs(admin_listeners) do
+> if entry.http2 then
+    http2 on;
+> break
+> end
+> end
+
     access_log ${{ADMIN_ACCESS_LOG}};
     error_log  ${{ADMIN_ERROR_LOG}} ${{LOG_LEVEL}};
 
@@ -421,6 +451,13 @@ server {
     listen $(entry.listener);
 > end
 
+> for _, entry in ipairs(status_listeners) do
+> if entry.http2 then
+    http2 on;
+> break
+> end
+> end
+
     access_log ${{STATUS_ACCESS_LOG}};
     error_log  ${{STATUS_ERROR_LOG}} ${{LOG_LEVEL}};
 
@@ -453,11 +490,18 @@ server {
 }
 > end
 
-> if (role == "control_plane" or role == "traditional") and #admin_listen > 0 and #admin_gui_listeners > 0 then
+> if (role == "control_plane" or role == "traditional") and #admin_listeners > 0 and #admin_gui_listeners > 0 then
 server {
     server_name kong_gui;
 > for i = 1, #admin_gui_listeners do
     listen $(admin_gui_listeners[i].listener);
+> end
+
+> for _, entry in ipairs(admin_gui_listeners) do
+> if entry.http2 then
+    http2 on;
+> break
+> end
 > end
 
 > if admin_gui_ssl_enabled then
@@ -465,7 +509,7 @@ server {
     ssl_certificate     $(admin_gui_ssl_cert[i]);
     ssl_certificate_key $(admin_gui_ssl_cert_key[i]);
 > end
-    ssl_protocols TLSv1.1 TLSv1.2 TLSv1.3;
+    ssl_protocols TLSv1.2 TLSv1.3;
 > end
 
     client_max_body_size 10m;
@@ -496,7 +540,7 @@ server {
 
     include nginx-kong-gui-include.conf;
 }
-> end -- of the (role == "control_plane" or role == "traditional") and #admin_listen > 0 and #admin_gui_listeners > 0
+> end -- of the (role == "control_plane" or role == "traditional") and #admin_listeners > 0 and #admin_gui_listeners > 0
 
 > if role == "control_plane" then
 server {

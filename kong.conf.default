@@ -680,7 +680,8 @@
                          #
                          # Example: `admin_listen = 127.0.0.1:8444 http2 ssl`
 
-#status_listen = off     # Comma-separated list of addresses and ports on
+#status_listen = 127.0.0.1:8007 reuseport backlog=16384
+                         # Comma-separated list of addresses and ports on
                          # which the Status API should listen.
                          # The Status API is a read-only endpoint
                          # allowing monitoring tools to retrieve metrics,
@@ -694,6 +695,7 @@
                          #   enabled.
                          # - `http2` will allow for clients to open HTTP/2
                          #   connections to Kong's proxy server.
+                         # - `proxy_protocol` will enable usage of the PROXY protocol.
                          #
                          # This value can be set to `off`, disabling
                          # the Status API for this node.
@@ -730,7 +732,9 @@
 
 #mem_cache_size = 128m           # Size of each of the two shared memory caches
                                  # for traditional mode database entities
-                                 # and runtime data.
+                                 # and runtime data, `kong_core_cache` and 
+                                 # `kong_cache`.
+                                 #
                                  # The accepted units are `k` and `m`, with a minimum
                                  # recommended value of a few MBs.
                                  #
@@ -744,6 +748,7 @@
 #ssl_cipher_suite = intermediate # Defines the TLS ciphers served by Nginx.
                                  # Accepted values are `modern`,
                                  # `intermediate`, `old`, `fips` or `custom`.
+                                 # If you want to enable TLSv1.1, this value has to be `old`.
                                  #
                                  # See https://wiki.mozilla.org/Security/Server_Side_TLS
                                  # for detailed descriptions of each cipher
@@ -758,13 +763,15 @@
                                  # If you use DHE ciphers, you must also
                                  # configure the `ssl_dhparam` parameter.
 
-#ssl_protocols = TLSv1.1 TLSv1.2 TLSv1.3
+#ssl_protocols = TLSv1.2 TLSv1.3
                                  # Enables the specified protocols for
                                  # client-side connections. The set of
                                  # supported protocol versions also depends
                                  # on the version of OpenSSL Kong was built
                                  # with. This value is ignored if
                                  # `ssl_cipher_suite` is not `custom`.
+                                 # If you want to enable TLSv1.1, you should
+                                 # set `ssl_cipher_suite` to `old`.
                                  #
                                  # See http://nginx.org/en/docs/http/ngx_http_ssl_module.html#ssl_protocols
 
@@ -1013,7 +1020,7 @@
                                      # each upstream request to open a new
                                      # connection.
 
-#upstream_keepalive_max_requests = 1000  # Sets the default maximum number of
+#upstream_keepalive_max_requests = 10000 # Sets the default maximum number of
                                          # requests than can be proxied upstream
                                          # through one keepalive connection.
                                          # After the maximum number of requests
@@ -1067,6 +1074,8 @@
 # - `nginx_http_<directive>`: Injects `<directive>` in Kong's `http {}` block.
 # - `nginx_proxy_<directive>`: Injects `<directive>` in Kong's proxy
 #   `server {}` block.
+# - `nginx_location_<directive>`: Injects `<directive>` in Kong's proxy `/`
+#    location block (nested under Kong's proxy server {} block).
 # - `nginx_upstream_<directive>`: Injects `<directive>` in Kong's proxy
 #   `upstream {}` block.
 # - `nginx_admin_<directive>`: Injects `<directive>` in Kong's Admin API
@@ -1176,11 +1185,14 @@
                                             # roughly 2 seconds.
 
 #nginx_http_lua_regex_cache_max_entries = 8192  # Specifies the maximum number of entries allowed
-                                                # in the worker process level compiled regex cache.
+                                                # in the worker process level PCRE JIT compiled regex cache.
                                                 # It is recommended to set it to at least (number of regex paths * 2)
-                                                # to avoid high CPU usages.
+                                                # to avoid high CPU usages if you manually specified `router_flavor` to
+                                                # `traditional`. `expressions` and `traditional_compat` router does
+                                                # not make use of the PCRE library and their behavior
+                                                # is unaffected by this setting.
 
-#nginx_http_keepalive_requests = 1000  # Sets the maximum number of client requests that can be served through one
+#nginx_http_keepalive_requests = 10000 # Sets the maximum number of client requests that can be served through one
                                        # keep-alive connection. After the maximum number of requests are made,
                                        # the connection is closed.
                                        # Closing connections periodically is necessary to free per-connection
@@ -1522,7 +1534,7 @@
                                  # property receives a value (in seconds), it
                                  # will override the TTL for all records.
 
-#dns_stale_ttl = 4               # Defines, in seconds, how long a record will
+#dns_stale_ttl = 3600            # Defines, in seconds, how long a record will
                                  # remain in cache past its TTL. This value
                                  # will be used while the new DNS record is
                                  # fetched in the background.
@@ -1530,6 +1542,8 @@
                                  # record until either the refresh query
                                  # completes, or the `dns_stale_ttl` number of
                                  # seconds have passed.
+                                 # This configuration enables Kong to be more
+                                 # resilient during resolver downtime.
 
 #dns_cache_size = 10000          # Defines the maximum allowed number of
                                  # DNS records stored in memory cache.
@@ -1752,7 +1766,7 @@
                                  #
                                  # See https://github.com/openresty/lua-nginx-module#lua_ssl_verify_depth
 
-#lua_ssl_protocols = TLSv1.1 TLSv1.2 TLSv1.3   # Defines the TLS versions supported
+#lua_ssl_protocols = TLSv1.2 TLSv1.3   # Defines the TLS versions supported
                                                # when handshaking with OpenResty's
                                                # TCP cosocket APIs.
                                                #
@@ -2051,7 +2065,7 @@
 # The following namespaces are supported:
 #
 # - `nginx_wasm_<directive>`: Injects `<directive>` into the `wasm {}` block.
-# - `nginx_wasm_shm_<name>`: Injects `shm_kv <name>` into the `wasm {}` block,
+# - `nginx_wasm_shm_kv_<name>`: Injects `shm_kv <name>` into the `wasm {}` block,
 #   allowing operators to define custom shared memory zones which are usable by
 #   the `get_shared_data`/`set_shared_data` Proxy-Wasm SDK functions.
 # - `nginx_wasm_wasmtime_<flag>`: Injects `flag <flag>` into the `wasmtime {}`
@@ -2127,7 +2141,7 @@
 # information such as domain name tried during these processes.
 #
 #request_debug = on              # When enabled, Kong will provide detailed timing information
-                                 # for its components to the client and the error log 
+                                 # for its components to the client and the error log
                                  # if the following headers are present in the proxy request:
                                  # - `X-Kong-Request-Debug`:
                                  #   If the value is set to `*`,

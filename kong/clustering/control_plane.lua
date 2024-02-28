@@ -5,7 +5,6 @@ local _MT = { __index = _M, }
 local semaphore = require("ngx.semaphore")
 local cjson = require("cjson.safe")
 local declarative = require("kong.db.declarative")
-local utils = require("kong.tools.utils")
 local clustering_utils = require("kong.clustering.utils")
 local compat = require("kong.clustering.compat")
 local constants = require("kong.constants")
@@ -40,8 +39,8 @@ local sleep = ngx.sleep
 
 local plugins_list_to_map = compat.plugins_list_to_map
 local update_compatible_payload = compat.update_compatible_payload
-local deflate_gzip = utils.deflate_gzip
-local yield = utils.yield
+local deflate_gzip = require("kong.tools.gzip").deflate_gzip
+local yield = require("kong.tools.yield").yield
 local connect_dp = clustering_utils.connect_dp
 
 
@@ -77,6 +76,17 @@ local function is_timeout(err)
 end
 
 
+local function extract_dp_cert(cert)
+  local expiry_timestamp = cert:get_not_after()
+  -- values in cert_details must be strings
+  local cert_details = {
+    expiry_timestamp = expiry_timestamp,
+  }
+
+  return cert_details
+end
+
+
 function _M.new(clustering)
   assert(type(clustering) == "table",
          "kong.clustering is not instantiated")
@@ -109,9 +119,9 @@ function _M:export_deflated_reconfigure_payload()
   end
 
   -- store serialized plugins map for troubleshooting purposes
-  local shm_key_name = "clustering:cp_plugins_configured:worker_" .. worker_id()
+  local shm_key_name = "clustering:cp_plugins_configured:worker_" .. (worker_id() or -1)
   kong_dict:set(shm_key_name, cjson_encode(self.plugins_configured))
-  ngx_log(ngx_DEBUG, "plugin configuration map key: " .. shm_key_name .. " configuration: ", kong_dict:get(shm_key_name))
+  ngx_log(ngx_DEBUG, "plugin configuration map key: ", shm_key_name, " configuration: ", kong_dict:get(shm_key_name))
 
   local config_hash, hashes = calculate_config_hash(config_table)
 
@@ -165,7 +175,7 @@ function _M:push_config()
 
   ngx_update_time()
   local duration = ngx_now() - start
-  ngx_log(ngx_DEBUG, _log_prefix, "config pushed to ", n, " data-plane nodes in " .. duration .. " seconds")
+  ngx_log(ngx_DEBUG, _log_prefix, "config pushed to ", n, " data-plane nodes in ", duration, " seconds")
 end
 
 
@@ -173,7 +183,7 @@ _M.check_version_compatibility = compat.check_version_compatibility
 _M.check_configuration_compatibility = compat.check_configuration_compatibility
 
 
-function _M:handle_cp_websocket()
+function _M:handle_cp_websocket(cert)
   local dp_id = ngx_var.arg_node_id
   local dp_hostname = ngx_var.arg_node_hostname
   local dp_ip = ngx_var.remote_addr
@@ -220,6 +230,7 @@ function _M:handle_cp_websocket()
     return ngx_exit(ngx_CLOSE)
   end
 
+  local dp_cert_details = extract_dp_cert(cert)
   local dp_plugins_map = plugins_list_to_map(data.plugins)
   local config_hash = DECLARATIVE_EMPTY_CONFIG_HASH -- initial hash
   local last_seen = ngx_time()
@@ -227,14 +238,17 @@ function _M:handle_cp_websocket()
   local purge_delay = self.conf.cluster_data_plane_purge_delay
   local update_sync_status = function()
     local ok
-    ok, err = kong.db.clustering_data_planes:upsert({ id = dp_id, }, {
+    ok, err = kong.db.clustering_data_planes:upsert({ id = dp_id }, {
       last_seen = last_seen,
-      config_hash = config_hash ~= "" and config_hash or nil,
+      config_hash = config_hash ~= ""
+                and config_hash
+                 or DECLARATIVE_EMPTY_CONFIG_HASH,
       hostname = dp_hostname,
       ip = dp_ip,
       version = dp_version,
       sync_status = sync_status, -- TODO: import may have been failed though
       labels = data.labels,
+      cert_details = dp_cert_details,
     }, { ttl = purge_delay })
     if not ok then
       ngx_log(ngx_ERR, _log_prefix, "unable to update clustering data plane status: ", err, log_suffix)
@@ -336,6 +350,10 @@ function _M:handle_cp_websocket()
 
       if not data then
         return nil, "did not receive ping frame from data plane"
+
+      elseif #data ~= 32 then
+        return nil, "received a ping frame from the data plane with an invalid"
+                 .. " hash: '" .. tostring(data) .. "'"
       end
 
       -- dps only send pings

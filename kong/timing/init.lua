@@ -142,10 +142,6 @@ end
 
 
 function _M.set_root_context_prop(k, v)
-  if not should_run() then
-    return
-  end
-
   ngx.ctx.req_trace_ctx:set_root_context_prop(k, v)
 end
 
@@ -309,6 +305,14 @@ function _M.register_hooks()
   req_dyn_hook.hook("timing", "after:plugin", function()
     _M.leave_context() -- leave plugin_id
     _M.leave_context() -- leave plugin_name
+  end)
+
+  req_dyn_hook.hook("timing", "before:router", function()
+    _M.enter_context("router")
+  end)
+
+  req_dyn_hook.hook("timing", "after:router", function()
+    _M.leave_context() -- leave router
   end)
 end
 

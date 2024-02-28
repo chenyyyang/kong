@@ -15,8 +15,6 @@ local ktls         = require "resty.kong.tls"
 local request_id   = require "kong.tracing.request_id"
 
 
-
-
 local PluginsIterator = require "kong.runloop.plugins_iterator"
 local log_level       = require "kong.runloop.log_level"
 local instrumentation = require "kong.tracing.instrumentation"
@@ -113,10 +111,12 @@ local STREAM_TLS_TERMINATE_SOCK
 local STREAM_TLS_PASSTHROUGH_SOCK
 
 
+local get_header
 local set_authority
 local set_service_ssl = upstream_ssl.set_service_ssl
 
 if is_http_module then
+  get_header = require("kong.tools.http").get_header
   set_authority = require("resty.kong.grpc").set_authority
 end
 
@@ -634,7 +634,7 @@ do
   local CURRENT_BALANCER_HASH = 0
 
   reconfigure_handler = function(data)
-    local worker_id = ngx_worker_id()
+    local worker_id = ngx_worker_id() or -1
 
     if exiting() then
       log(NOTICE, "declarative reconfigure was canceled on worker #", worker_id,
@@ -762,11 +762,6 @@ do
                " ms on worker #", worker_id, ": ", err)
     end
   end -- reconfigure_handler
-end
-
-
-local function register_events()
-  events.register_events(reconfigure_handler)
 end
 
 
@@ -921,7 +916,7 @@ return {
         return
       end
 
-      register_events()
+      events.register_events(reconfigure_handler)
 
       -- initialize balancers for active healthchecks
       timer_at(0, function()
@@ -967,83 +962,46 @@ return {
       if strategy ~= "off" then
         local worker_state_update_frequency = kong.configuration.worker_state_update_frequency or 1
 
-        local router_async_opts = {
-          name = "router",
-          timeout = 0,
-          on_timeout = "return_true",
-        }
-
-        local function rebuild_router_timer(premature)
+        local function rebuild_timer(premature)
           if premature then
             return
           end
 
-          -- Don't wait for the semaphore (timeout = 0) when updating via the
-          -- timer.
-          -- If the semaphore is locked, that means that the rebuild is
-          -- already ongoing.
-          local ok, err = rebuild_router(router_async_opts)
-          if not ok then
-            log(ERR, "could not rebuild router via timer: ", err)
-          end
-        end
-
-        local _, err = kong.timer:named_every("router-rebuild",
-                                         worker_state_update_frequency,
-                                         rebuild_router_timer)
-        if err then
-          log(ERR, "could not schedule timer to rebuild router: ", err)
-        end
-
-        local plugins_iterator_async_opts = {
-          name = "plugins_iterator",
-          timeout = 0,
-          on_timeout = "return_true",
-        }
-
-        local function rebuild_plugins_iterator_timer(premature)
-          if premature then
-            return
-          end
-
-          local _, err = rebuild_plugins_iterator(plugins_iterator_async_opts)
-          if err then
-            log(ERR, "could not rebuild plugins iterator via timer: ", err)
-          end
-        end
-
-        local _, err = kong.timer:named_every("plugins-iterator-rebuild",
-                                         worker_state_update_frequency,
-                                         rebuild_plugins_iterator_timer)
-        if err then
-          log(ERR, "could not schedule timer to rebuild plugins iterator: ", err)
-        end
-
-
-        if wasm.enabled() then
-          local wasm_async_opts = {
-            name = "wasm",
+          local router_update_status, err = rebuild_router({
+            name = "router",
             timeout = 0,
             on_timeout = "return_true",
-          }
+          })
+          if not router_update_status then
+            log(ERR, "could not rebuild router via timer: ", err)
+          end
 
-          local function rebuild_wasm_filter_chains_timer(premature)
-            if premature then
-              return
-            end
+          local plugins_iterator_update_status, err = rebuild_plugins_iterator({
+            name = "plugins_iterator",
+            timeout = 0,
+            on_timeout = "return_true",
+          })
+          if not plugins_iterator_update_status then
+            log(ERR, "could not rebuild plugins iterator via timer: ", err)
+          end
 
-            local _, err = rebuild_wasm_state(wasm_async_opts)
-            if err then
+          if wasm.enabled() then
+            local wasm_update_status, err = rebuild_wasm_state({
+              name = "wasm",
+              timeout = 0,
+              on_timeout = "return_true",
+            })
+            if not wasm_update_status then
               log(ERR, "could not rebuild wasm filter chains via timer: ", err)
             end
           end
+        end
 
-          local _, err = kong.timer:named_every("wasm-filter-chains-rebuild",
-                                           worker_state_update_frequency,
-                                           rebuild_wasm_filter_chains_timer)
-          if err then
-            log(ERR, "could not schedule timer to rebuild wasm filter chains: ", err)
-          end
+        local _, err = kong.timer:named_every("rebuild",
+                                         worker_state_update_frequency,
+                                         rebuild_timer)
+        if err then
+          log(ERR, "could not schedule timer to rebuild: ", err)
         end
       end
     end,
@@ -1151,9 +1109,9 @@ return {
       -- to plugins in the access phase for doing headers propagation
       instrumentation.precreate_balancer_span(ctx)
 
-      local is_timing_enabled = ctx.is_timing_enabled
+      local has_timing = ctx.has_timing
 
-      if is_timing_enabled then
+      if has_timing then
         req_dyn_hook_run_hooks(ctx, "timing", "before:router")
       end
 
@@ -1161,7 +1119,7 @@ return {
       local router = get_updated_router()
       local match_t = router:exec(ctx)
 
-      if is_timing_enabled then
+      if has_timing then
         req_dyn_hook_run_hooks(ctx, "timing", "after:router")
       end
 
@@ -1182,7 +1140,7 @@ return {
 
       ctx.workspace = match_t.route and match_t.route.ws_id
 
-      if is_timing_enabled then
+      if has_timing then
         req_dyn_hook_run_hooks(ctx, "timing", "workspace_id:got", ctx.workspace)
       end
 
@@ -1212,11 +1170,11 @@ return {
 
       local trusted_ip = kong.ip.is_trusted(realip_remote_addr)
       if trusted_ip then
-        forwarded_proto  = var.http_x_forwarded_proto  or ctx.scheme
-        forwarded_host   = var.http_x_forwarded_host   or host
-        forwarded_port   = var.http_x_forwarded_port   or port
-        forwarded_path   = var.http_x_forwarded_path
-        forwarded_prefix = var.http_x_forwarded_prefix
+        forwarded_proto  = get_header("x_forwarded_proto", ctx)  or ctx.scheme
+        forwarded_host   = get_header("x_forwarded_host", ctx)   or host
+        forwarded_port   = get_header("x_forwarded_port", ctx)   or port
+        forwarded_path   = get_header("x_forwarded_path", ctx)
+        forwarded_prefix = get_header("x_forwarded_prefix", ctx)
 
       else
         forwarded_proto  = ctx.scheme
@@ -1306,7 +1264,7 @@ return {
       end
 
       -- Keep-Alive and WebSocket Protocol Upgrade Headers
-      local upgrade = var.http_upgrade
+      local upgrade = get_header("upgrade", ctx)
       if upgrade and lower(upgrade) == "websocket" then
         var.upstream_connection = "keep-alive, Upgrade"
         var.upstream_upgrade    = "websocket"
@@ -1316,7 +1274,7 @@ return {
       end
 
       -- X-Forwarded-* Headers
-      local http_x_forwarded_for = var.http_x_forwarded_for
+      local http_x_forwarded_for = get_header("x_forwarded_for", ctx)
       if http_x_forwarded_for then
         var.upstream_x_forwarded_for = http_x_forwarded_for .. ", " ..
                                        realip_remote_addr
@@ -1403,7 +1361,7 @@ return {
       end
 
       -- clear hop-by-hop request headers:
-      local http_connection = var.http_connection
+      local http_connection = get_header("connection", ctx)
       if http_connection ~= "keep-alive" and
          http_connection ~= "close"      and
          http_connection ~= "upgrade"
@@ -1424,7 +1382,7 @@ return {
       end
 
       -- add te header only when client requests trailers (proxy removes it)
-      local http_te = var.http_te
+      local http_te = get_header("te", ctx)
       if http_te then
         if http_te == "trailers" then
           var.upstream_te = "trailers"
