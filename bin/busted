@@ -4,7 +4,24 @@ setmetatable(_G, nil)
 
 local pl_path = require("pl.path")
 
-local cert_path = pl_path.abspath("spec/fixtures/kong_spec.crt")
+local pl_file = require("pl.file")
+
+local tools_system = require("kong.tools.system")
+
+local emmy_debugger = require("kong.tools.emmy_debugger")
+
+local cert_path do
+  local busted_cert_file = pl_path.tmpname()
+  local busted_cert_content = pl_file.read("spec/fixtures/kong_spec.crt")
+
+  local system_cert_path, err = tools_system.get_system_trusted_certs_filepath()
+  if system_cert_path then
+    busted_cert_content = busted_cert_content .. "\n" .. pl_file.read(system_cert_path)
+  end
+
+  pl_file.write(busted_cert_file, busted_cert_content)
+  cert_path = busted_cert_file
+end
 
 local DEFAULT_RESTY_FLAGS=string.format(" -c 4096 --http-conf 'lua_ssl_trusted_certificate %s;' ", cert_path)
 
@@ -57,6 +74,16 @@ end
 
 pcall(require, "luarocks.loader")
 
+if os.getenv("BUSTED_EMMY_DEBUGGER") then
+  emmy_debugger.init({
+    debugger = os.getenv("BUSTED_EMMY_DEBUGGER"),
+    host = os.getenv("BUSTED_EMMY_DEBUGGER_HOST"),
+    port = os.getenv("BUSTED_EMMY_DEBUGGER_PORT"),
+    wait = true,
+    source_path = os.getenv("BUSTED_EMMY_DEBUGGER_SOURCE_PATH"),
+  })
+end
+
 require("kong.globalpatches")({
   cli = true,
   rbusted = true
@@ -72,5 +99,6 @@ _G.require = require "spec.require".require
 
 -- Busted command-line runner
 require 'busted.runner'({ standalone = false })
+
 
 -- vim: set ft=lua ts=2 sw=2 sts=2 et :

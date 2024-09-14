@@ -2,10 +2,10 @@ local _M = {}
 local _MT = { __index = _M, }
 
 
-local buffer = require("string.buffer")
 local lrucache = require("resty.lrucache")
 local tb_new = require("table.new")
 local utils = require("kong.router.utils")
+local transform = require("kong.router.transform")
 local rat = require("kong.tools.request_aware_table")
 local yield = require("kong.tools.yield").yield
 
@@ -15,9 +15,7 @@ local assert = assert
 local setmetatable = setmetatable
 local pairs = pairs
 local ipairs = ipairs
-local tonumber = tonumber
-
-
+local next = next
 local max = math.max
 
 
@@ -32,20 +30,20 @@ local ngx_ERR       = ngx.ERR
 local check_select_params  = utils.check_select_params
 local get_service_info     = utils.get_service_info
 local route_match_stat     = utils.route_match_stat
+local split_host_port      = transform.split_host_port
+local split_routes_and_services_by_path = transform.split_routes_and_services_by_path
 
 
 local DEFAULT_MATCH_LRUCACHE_SIZE = utils.DEFAULT_MATCH_LRUCACHE_SIZE
 
 
-local LOGICAL_OR  = " || "
-local LOGICAL_AND = " && "
-
-
 local is_http = ngx.config.subsystem == "http"
 
 
--- reuse buffer object
-local values_buf = buffer.new(64)
+local get_header
+if is_http then
+  get_header = require("kong.tools.http").get_header
+end
 
 
 local get_atc_context
@@ -124,69 +122,14 @@ do
       ngx_log = mock_ngx.log
     end
 
-    fields._set_ngx(mock_ngx)
-  end
-end
-
-
-local is_empty_field
-do
-  local null    = ngx.null
-  local isempty = require("table.isempty")
-
-  is_empty_field = function(f)
-    return f == nil or f == null or isempty(f)
-  end
-end
-
-
-local function escape_str(str)
-  -- raw string
-  if not str:find([["#]], 1, true) then
-    return "r#\"" .. str .. "\"#"
-  end
-
-  -- standard string escaping (unlikely case)
-  if str:find([[\]], 1, true) then
-    str = str:gsub([[\]], [[\\]])
-  end
-
-  if str:find([["]], 1, true) then
-    str = str:gsub([["]], [[\"]])
-  end
-
-  return "\"" .. str .. "\""
-end
-
-
-local function gen_for_field(name, op, vals, val_transform)
-  if is_empty_field(vals) then
-    return nil
-  end
-
-  local vals_n = #vals
-  assert(vals_n > 0)
-
-  values_buf:reset():put("(")
-
-  for i = 1, vals_n do
-    local p = vals[i]
-    local op = (type(op) == "string") and op or op(p)
-
-    if i > 1 then
-      values_buf:put(LOGICAL_OR)
+    get_header = function(key)
+      local mock_headers = mock_ngx.headers or {}
+      local mock_var = mock_ngx.var or {}
+      return mock_headers[key] or mock_var["http_" .. key]
     end
 
-    values_buf:putf("%s %s %s", name, op,
-                    escape_str(val_transform and val_transform(op, p) or p))
+    fields._set_ngx(mock_ngx)
   end
-
-  -- consume the whole buffer
-  -- returns a local variable instead of using a tail call
-  -- to avoid NYI
-  local str = values_buf:put(")"):get()
-
-  return str
 end
 
 
@@ -285,6 +228,7 @@ local function new_from_previous(routes, get_exp_and_priority, old_router)
     local route_id = route.id
 
     if not route_id then
+      old_router.rebuilding = false
       return nil, "could not categorize route"
     end
 
@@ -347,8 +291,13 @@ end
 
 
 function _M.new(routes, cache, cache_neg, old_router, get_exp_and_priority)
+  -- routes argument is a table with [route] and [service]
   if type(routes) ~= "table" then
     return error("expected arg #1 routes to be a table")
+  end
+
+  if is_http then
+    routes = split_routes_and_services_by_path(routes)
   end
 
   local router, err
@@ -368,48 +317,6 @@ function _M.new(routes, cache, cache_neg, old_router, get_exp_and_priority)
   router.cache_neg = cache_neg or lrucache.new(DEFAULT_MATCH_LRUCACHE_SIZE)
 
   return router
-end
-
-
--- split port in host, ignore form '[...]'
--- example.com:123 => example.com, 123
--- example.*:123 => example.*, 123
-local split_host_port
-do
-  local DEFAULT_HOSTS_LRUCACHE_SIZE = DEFAULT_MATCH_LRUCACHE_SIZE
-
-  local memo_hp = lrucache.new(DEFAULT_HOSTS_LRUCACHE_SIZE)
-
-  split_host_port = function(key)
-    if not key then
-      return nil, nil
-    end
-
-    local m = memo_hp:get(key)
-
-    if m then
-      return m[1], m[2]
-    end
-
-    local p = key:find(":", nil, true)
-    if not p then
-      memo_hp:set(key, { key, nil })
-      return key, nil
-    end
-
-    local port = tonumber(key:sub(p + 1))
-
-    if not port then
-      memo_hp:set(key, { key, nil })
-      return key, nil
-    end
-
-    local host = key:sub(1, p - 1)
-
-    memo_hp:set(key, { host, port })
-
-    return host, port
-  end
 end
 
 
@@ -435,6 +342,19 @@ local function set_upstream_uri(req_uri, match_t)
 
   match_t.upstream_uri = get_upstream_uri_v0(matched_route, request_postfix,
                                              req_uri, upstream_base)
+end
+
+
+-- captures has the form { [0] = full_path, [1] = capture1, [2] = capture2, ..., ["named1"] = named1, ... }
+-- and captures[0] will be the full matched path
+-- this function tests if there are captures other than the full path
+-- by checking if there are 2 or more than 2 keys
+local function has_capture(captures)
+  if not captures then
+    return false
+  end
+  local next_i = next(captures)
+  return next_i and next(captures, next_i) ~= nil
 end
 
 
@@ -481,7 +401,7 @@ function _M:matching(params)
     service         = service,
     prefix          = request_prefix,
     matches = {
-      uri_captures = (captures and captures[1]) and captures or nil,
+      uri_captures = has_capture(captures) and captures or nil,
     },
     upstream_url_t = {
       type = service_hostname_type,
@@ -524,7 +444,7 @@ function _M:exec(ctx)
   local fields = self.fields
 
   local req_uri = ctx and ctx.request_uri or var.request_uri
-  local req_host = var.http_host
+  local req_host = get_header("host", ctx)
 
   req_uri = strip_uri_args(req_uri)
 
@@ -581,10 +501,11 @@ function _M:exec(ctx)
   set_upstream_uri(req_uri, match_t)
 
   -- debug HTTP request header logic
-  add_debug_headers(var, header, match_t)
+  add_debug_headers(ctx, header, match_t)
 
   return match_t
 end
+
 
 else  -- is stream subsystem
 
@@ -708,16 +629,8 @@ function _M:exec(ctx)
   return match_t
 end
 
+
 end   -- if is_http
-
-
-_M.LOGICAL_OR      = LOGICAL_OR
-_M.LOGICAL_AND     = LOGICAL_AND
-
-_M.escape_str      = escape_str
-_M.is_empty_field  = is_empty_field
-_M.gen_for_field   = gen_for_field
-_M.split_host_port = split_host_port
 
 
 return _M

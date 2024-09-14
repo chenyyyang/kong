@@ -1,7 +1,6 @@
 local helpers = require "spec.helpers"
 local cjson   = require "cjson"
-local meta    = require "kong.meta"
-local utils   = require "kong.tools.utils"
+local uuid    = require "kong.tools.uuid"
 
 
 for _, strategy in helpers.each_strategy() do
@@ -105,7 +104,7 @@ for _, strategy in helpers.each_strategy() do
         name     = "basic-auth",
         route = { id = route4.id },
         config   = {
-          anonymous = utils.uuid(), -- a non-existing consumer id
+          anonymous = uuid.uuid(), -- a non-existing consumer id
         },
       }
 
@@ -578,7 +577,7 @@ for _, strategy in helpers.each_strategy() do
           }
         })
         assert.response(res).has.status(401)
-        assert.equal('Key realm="' .. meta._NAME .. '"', res.headers["WWW-Authenticate"])
+        assert.equal('Key', res.headers["WWW-Authenticate"])
       end)
 
       it("fails 401, with no credential provided", function()
@@ -590,7 +589,7 @@ for _, strategy in helpers.each_strategy() do
           }
         })
         assert.response(res).has.status(401)
-        assert.equal('Key realm="' .. meta._NAME .. '"', res.headers["WWW-Authenticate"])
+        assert.equal('Key', res.headers["WWW-Authenticate"])
       end)
 
     end)

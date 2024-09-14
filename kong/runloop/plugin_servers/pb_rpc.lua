@@ -183,7 +183,7 @@ local function index_table(table, field)
   end
 
   local res = table
-  for segment, e in ngx.re.gmatch(field, "\\w+", "o") do
+  for segment, e in ngx.re.gmatch(field, "\\w+", "jo") do
     if res[segment[0]] then
       res = res[segment[0]]
     else
@@ -409,9 +409,11 @@ function Rpc:handle_event(plugin_name, conf, phase)
       self.reset_instance(plugin_name, conf)
       kong.log.warn(err)
       return self:handle_event(plugin_name, conf, phase)
-    end
 
-    kong.log.err(err)
+    else
+      kong.log.err("pluginserver error: ", err or "unknown error")
+      kong.response.error(500)
+    end
   end
 end
 

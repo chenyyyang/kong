@@ -1,13 +1,13 @@
 #!/bin/bash -e
 
 # template variables starts
-libexpat_path="{{@libexpat//:libexpat}}"
+libexpat_path="{{@@libexpat//:libexpat}}"
 libxml2_path="invalid"
-openssl_path="{{@openssl//:openssl}}"
-luarocks_host_path="{{@luarocks//:luarocks_host}}"
-luajit_path="{{@openresty//:luajit}}"
+openssl_path="{{@@openssl//:openssl}}"
+luarocks_host_path="{{@@luarocks//:luarocks_host}}"
+luajit_path="{{@@openresty//:luajit}}"
 kongrocks_path="invalid"
-cross_deps_libyaml_path="{{@cross_deps_libyaml//:libyaml}}"
+cross_deps_libyaml_path="{{@@cross_deps_libyaml//:libyaml}}"
 CC={{CC}}
 LD={{LD}}
 LIB_RPATH={{lib_rpath}}
@@ -73,7 +73,6 @@ ROCKS_CONFIG=$ROCKS_CONFIG
 export LUAROCKS_CONFIG=$ROCKS_CONFIG
 export CC=$CC
 export LD=$LD
-export EXT_BUILD_ROOT=$root_path # for musl
 
 # no idea why PATH is not preserved in ctx.actions.run_shell
 export PATH=$PATH
